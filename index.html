@@ -11,23 +11,40 @@
 <style>
 :root{--bg:#0F2A2E;--ink:#EDE6D6;--dim:#8FA5A3;--accent:#FF6B6B;--track:#1D4047}
 body.break{--accent:#7FD6B2}
-*{box-sizing:border-box}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
 html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom);transition:color .3s}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom)}
+button{font:inherit;cursor:pointer;transition:transform .12s,background .2s,border-color .2s}
+button:active{transform:scale(.93)}
 .modes{display:flex;gap:8px}
-.modes button{background:none;border:1px solid var(--track);color:var(--dim);padding:8px 18px;border-radius:20px;font-size:15px}
-.modes button.on{border-color:var(--accent);color:var(--ink)}
-.ring{position:relative;width:min(80vw,320px);aspect-ratio:1}
+.modes button{background:none;border:1px solid var(--track);color:var(--dim);padding:8px 20px;border-radius:20px;font-size:15px}
+.modes button.on{border-color:var(--accent);color:var(--ink);background:var(--track)}
+.ring{position:relative;width:min(76vw,310px);aspect-ratio:1;cursor:pointer}
+.ring.run{animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{50%{transform:scale(1.02)}}
+@media(prefers-reduced-motion:reduce){.ring.run{animation:none}}
 svg{width:100%;height:100%;transform:rotate(-90deg)}
 circle{fill:none;stroke-width:10}
 .t{stroke:var(--track)}
-.p{stroke:var(--accent);stroke-linecap:round;transition:stroke-dashoffset .4s linear}
-.time{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:clamp(52px,16vw,76px);font-weight:300;font-variant-numeric:tabular-nums}
+.p{stroke:var(--accent);stroke-linecap:round;transition:stroke-dashoffset .4s linear,stroke .3s}
+.mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px}
+.time{font-size:clamp(50px,15vw,72px);font-weight:300;font-variant-numeric:tabular-nums}
+.hint{font-size:13px;color:var(--dim)}
+.set{display:flex;align-items:center;gap:16px}
+.set button{width:44px;height:44px;border-radius:50%;border:1px solid var(--track);background:var(--track);color:var(--ink);font-size:24px;line-height:1}
+.set .val{min-width:110px;text-align:center;font-size:18px}
+.set .val small{display:block;font-size:12px;color:var(--dim)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.chips button{background:none;border:1px solid var(--track);color:var(--dim);padding:6px 14px;border-radius:16px;font-size:14px}
+.chips button.on{border-color:var(--accent);color:var(--ink)}
 .ctrl{display:flex;gap:12px}
-.ctrl button{padding:14px 34px;border-radius:30px;border:0;font-size:17px;font-weight:600}
-#go{background:var(--accent);color:#0F2A2E}
+.ctrl button{padding:14px 36px;border-radius:30px;border:0;font-size:17px;font-weight:600}
+#go{background:var(--accent);color:#0F2A2E;min-width:130px}
 #reset{background:var(--track);color:var(--ink)}
-.count{color:var(--dim);font-size:15px}
+.dots{display:flex;gap:8px;min-height:12px}
+.dots i{width:10px;height:10px;border-radius:50%;background:var(--accent);animation:pop .3s}
+@keyframes pop{from{transform:scale(0)}}
+.count{color:var(--dim);font-size:14px;text-align:center}
 button:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
 </style>
 </head>
@@ -36,96 +53,143 @@ button:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
   <button id="m-focus" class="on">Focus</button>
   <button id="m-break">Break</button>
 </div>
-<div class="ring">
+
+<div class="ring" id="ring-wrap">
   <svg viewBox="0 0 120 120"><circle class="t" cx="60" cy="60" r="54"/><circle class="p" id="ring" cx="60" cy="60" r="54"/></svg>
-  <div class="time" id="time">25:00</div>
+  <div class="mid"><div class="time" id="time">25:00</div><div class="hint" id="hint">Tap to start</div></div>
 </div>
+
+<div class="set">
+  <button id="minus" aria-label="Decrease minutes">&minus;</button>
+  <div class="val"><span id="mins">25</span> min<small id="setlabel">Focus length</small></div>
+  <button id="plus" aria-label="Increase minutes">+</button>
+</div>
+<div class="chips" id="chips"></div>
+
 <div class="ctrl">
   <button id="go">Start</button>
   <button id="reset">Reset</button>
 </div>
+<div class="dots" id="dots"></div>
 <div class="count" id="count"></div>
 
 <script>
-const LEN = { focus: 25*60, break: 5*60 };
-const C = 2*Math.PI*54;
 const $ = id => document.getElementById(id);
-const ring = $('ring');
-ring.style.strokeDasharray = C;
-
-let mode = 'focus', left = LEN.focus, endAt = null, tick = null;
-
-// Sessions done today (saved on the phone)
+const C = 2*Math.PI*54;
+const PRESETS = { focus:[15,25,45,60], break:[5,10,15] };
+const LIMITS  = { focus:[1,180], break:[1,60] };
+let mins = { focus:25, break:5 };
+let mode='focus', left=0, endAt=null, tick=null, sessions=0;
 const today = new Date().toDateString();
-let sessions = 0;
+
+// Load saved settings and today's sessions
 try {
-  const s = JSON.parse(localStorage.getItem('sessions') || '{}');
-  if (s.day === today) sessions = s.n;
+  const s = JSON.parse(localStorage.getItem('timer')||'{}');
+  if (s.mins) mins = s.mins;
+  if (s.day===today) sessions = s.n||0;
 } catch(e){}
-function saveSessions(){
-  try { localStorage.setItem('sessions', JSON.stringify({day: today, n: sessions})); } catch(e){}
+function save(){ try{ localStorage.setItem('timer', JSON.stringify({mins, day:today, n:sessions})); }catch(e){} }
+const buzz = ms => { if (navigator.vibrate) navigator.vibrate(ms); };
+const total = () => mins[mode]*60;
+
+$('ring').style.strokeDasharray = C;
+
+function chips(){
+  $('chips').innerHTML = '';
+  PRESETS[mode].forEach(m=>{
+    const b = document.createElement('button');
+    b.textContent = m+' min';
+    b.className = m===mins[mode] ? 'on' : '';
+    b.onclick = ()=>setMinutes(m);
+    $('chips').appendChild(b);
+  });
 }
 
 function draw(){
-  const m = String(Math.floor(left/60)).padStart(2,'0');
-  const s = String(left%60).padStart(2,'0');
-  $('time').textContent = m+':'+s;
-  document.title = m+':'+s+' · Focus Timer';
-  ring.style.strokeDashoffset = C * (1 - left/LEN[mode]);
+  const mm = String(Math.floor(left/60)).padStart(2,'0');
+  const ss = String(left%60).padStart(2,'0');
+  $('time').textContent = mm+':'+ss;
+  document.title = mm+':'+ss+' · Focus Timer';
+  $('ring').style.strokeDashoffset = C*(1-left/total());
+  $('mins').textContent = mins[mode];
+  $('setlabel').textContent = mode==='focus' ? 'Focus length' : 'Break length';
+  $('go').textContent = endAt ? 'Pause' : (left<total() ? 'Resume' : 'Start');
+  $('hint').textContent = endAt ? 'Tap to pause' : (left<total() ? 'Paused · tap to resume' : 'Tap to start');
+  $('ring-wrap').classList.toggle('run', !!endAt);
+  $('dots').innerHTML = '<i></i>'.repeat(Math.min(sessions,12));
   $('count').textContent = sessions
     ? sessions+' focus session'+(sessions>1?'s':'')+' completed today'
     : 'No sessions yet today. Start your first one.';
-  $('go').textContent = endAt ? 'Pause' : 'Start';
+  chips();
 }
 
-function beep(){
-  try {
-    const a = new (window.AudioContext||window.webkitAudioContext)();
-    [0,0.25,0.5].forEach(d=>{
-      const o = a.createOscillator(), g = a.createGain();
-      o.frequency.value = 880; o.connect(g); g.connect(a.destination);
-      g.gain.setValueAtTime(0.2, a.currentTime+d);
-      g.gain.exponentialRampToValueAtTime(0.001, a.currentTime+d+0.2);
-      o.start(a.currentTime+d); o.stop(a.currentTime+d+0.2);
-    });
-  } catch(e){}
-  if (navigator.vibrate) navigator.vibrate([200,100,200]);
-}
-
-function stop(){ clearInterval(tick); tick = null; endAt = null; }
+function stop(){ clearInterval(tick); tick=null; endAt=null; }
 
 function setMode(m){
-  stop(); mode = m; left = LEN[m];
+  stop(); mode=m; left=total();
   document.body.classList.toggle('break', m==='break');
   $('m-focus').classList.toggle('on', m==='focus');
   $('m-break').classList.toggle('on', m==='break');
   draw();
 }
 
+function setMinutes(m){
+  const [lo,hi] = LIMITS[mode];
+  mins[mode] = Math.min(hi, Math.max(lo, m));
+  stop(); left = total(); save(); buzz(15); draw();
+}
+
+function beep(){
+  try {
+    const a = new (window.AudioContext||window.webkitAudioContext)();
+    [0,.25,.5].forEach(d=>{
+      const o=a.createOscillator(), g=a.createGain();
+      o.frequency.value=880; o.connect(g); g.connect(a.destination);
+      g.gain.setValueAtTime(.2,a.currentTime+d);
+      g.gain.exponentialRampToValueAtTime(.001,a.currentTime+d+.2);
+      o.start(a.currentTime+d); o.stop(a.currentTime+d+.2);
+    });
+  } catch(e){}
+  buzz([200,100,200]);
+}
+
 function finish(){
   stop(); beep();
-  if (mode==='focus'){ sessions++; saveSessions(); setMode('break'); }
+  if (mode==='focus'){ sessions++; save(); setMode('break'); }
   else setMode('focus');
 }
 
 function toggle(){
-  if (endAt){ left = Math.max(0, Math.round((endAt-Date.now())/1000)); stop(); draw(); return; }
-  endAt = Date.now() + left*1000;
+  buzz(20);
+  if (endAt){ left=Math.max(0,Math.round((endAt-Date.now())/1000)); stop(); draw(); return; }
+  endAt = Date.now()+left*1000;
   tick = setInterval(()=>{
-    left = Math.max(0, Math.round((endAt-Date.now())/1000));
+    left = Math.max(0,Math.round((endAt-Date.now())/1000));
     draw();
     if (left===0) finish();
-  }, 250);
+  },250);
   draw();
 }
 
 $('go').onclick = toggle;
-$('reset').onclick = () => setMode(mode);
-$('m-focus').onclick = () => setMode('focus');
-$('m-break').onclick = () => setMode('break');
+$('ring-wrap').onclick = toggle;
+$('reset').onclick = ()=>{ buzz(20); setMode(mode); };
+$('m-focus').onclick = ()=>setMode('focus');
+$('m-break').onclick = ()=>setMode('break');
+$('minus').onclick = ()=>setMinutes(mins[mode]-1);
+$('plus').onclick  = ()=>setMinutes(mins[mode]+1);
+
+// Hold + or − to change quickly
+[['minus',-1],['plus',1]].forEach(([id,step])=>{
+  let t, r;
+  const start = ()=>{ t=setTimeout(()=>{ r=setInterval(()=>setMinutes(mins[mode]+step),90); },400); };
+  const end = ()=>{ clearTimeout(t); clearInterval(r); };
+  ['pointerdown'].forEach(e=>$(id).addEventListener(e,start));
+  ['pointerup','pointerleave','pointercancel'].forEach(e=>$(id).addEventListener(e,end));
+});
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
-draw();
+setMode('focus');
 </script>
 </body>
 </html>
