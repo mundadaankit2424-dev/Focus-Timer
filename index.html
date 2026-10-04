@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0F2A2E">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Focus Timer</title>
+<style>
+:root{--bg:#0F2A2E;--ink:#EDE6D6;--dim:#8FA5A3;--accent:#FF6B6B;--track:#1D4047}
+body.break{--accent:#7FD6B2}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom);transition:color .3s}
+.modes{display:flex;gap:8px}
+.modes button{background:none;border:1px solid var(--track);color:var(--dim);padding:8px 18px;border-radius:20px;font-size:15px}
+.modes button.on{border-color:var(--accent);color:var(--ink)}
+.ring{position:relative;width:min(80vw,320px);aspect-ratio:1}
+svg{width:100%;height:100%;transform:rotate(-90deg)}
+circle{fill:none;stroke-width:10}
+.t{stroke:var(--track)}
+.p{stroke:var(--accent);stroke-linecap:round;transition:stroke-dashoffset .4s linear}
+.time{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:clamp(52px,16vw,76px);font-weight:300;font-variant-numeric:tabular-nums}
+.ctrl{display:flex;gap:12px}
+.ctrl button{padding:14px 34px;border-radius:30px;border:0;font-size:17px;font-weight:600}
+#go{background:var(--accent);color:#0F2A2E}
+#reset{background:var(--track);color:var(--ink)}
+.count{color:var(--dim);font-size:15px}
+button:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+</style>
+</head>
+<body>
+<div class="modes">
+  <button id="m-focus" class="on">Focus</button>
+  <button id="m-break">Break</button>
+</div>
+<div class="ring">
+  <svg viewBox="0 0 120 120"><circle class="t" cx="60" cy="60" r="54"/><circle class="p" id="ring" cx="60" cy="60" r="54"/></svg>
+  <div class="time" id="time">25:00</div>
+</div>
+<div class="ctrl">
+  <button id="go">Start</button>
+  <button id="reset">Reset</button>
+</div>
+<div class="count" id="count"></div>
+
+<script>
+const LEN = { focus: 25*60, break: 5*60 };
+const C = 2*Math.PI*54;
+const $ = id => document.getElementById(id);
+const ring = $('ring');
+ring.style.strokeDasharray = C;
+
+let mode = 'focus', left = LEN.focus, endAt = null, tick = null;
+
+// Sessions done today (saved on the phone)
+const today = new Date().toDateString();
+let sessions = 0;
+try {
+  const s = JSON.parse(localStorage.getItem('sessions') || '{}');
+  if (s.day === today) sessions = s.n;
+} catch(e){}
+function saveSessions(){
+  try { localStorage.setItem('sessions', JSON.stringify({day: today, n: sessions})); } catch(e){}
+}
+
+function draw(){
+  const m = String(Math.floor(left/60)).padStart(2,'0');
+  const s = String(left%60).padStart(2,'0');
+  $('time').textContent = m+':'+s;
+  document.title = m+':'+s+' · Focus Timer';
+  ring.style.strokeDashoffset = C * (1 - left/LEN[mode]);
+  $('count').textContent = sessions
+    ? sessions+' focus session'+(sessions>1?'s':'')+' completed today'
+    : 'No sessions yet today. Start your first one.';
+  $('go').textContent = endAt ? 'Pause' : 'Start';
+}
+
+function beep(){
+  try {
+    const a = new (window.AudioContext||window.webkitAudioContext)();
+    [0,0.25,0.5].forEach(d=>{
+      const o = a.createOscillator(), g = a.createGain();
+      o.frequency.value = 880; o.connect(g); g.connect(a.destination);
+      g.gain.setValueAtTime(0.2, a.currentTime+d);
+      g.gain.exponentialRampToValueAtTime(0.001, a.currentTime+d+0.2);
+      o.start(a.currentTime+d); o.stop(a.currentTime+d+0.2);
+    });
+  } catch(e){}
+  if (navigator.vibrate) navigator.vibrate([200,100,200]);
+}
+
+function stop(){ clearInterval(tick); tick = null; endAt = null; }
+
+function setMode(m){
+  stop(); mode = m; left = LEN[m];
+  document.body.classList.toggle('break', m==='break');
+  $('m-focus').classList.toggle('on', m==='focus');
+  $('m-break').classList.toggle('on', m==='break');
+  draw();
+}
+
+function finish(){
+  stop(); beep();
+  if (mode==='focus'){ sessions++; saveSessions(); setMode('break'); }
+  else setMode('focus');
+}
+
+function toggle(){
+  if (endAt){ left = Math.max(0, Math.round((endAt-Date.now())/1000)); stop(); draw(); return; }
+  endAt = Date.now() + left*1000;
+  tick = setInterval(()=>{
+    left = Math.max(0, Math.round((endAt-Date.now())/1000));
+    draw();
+    if (left===0) finish();
+  }, 250);
+  draw();
+}
+
+$('go').onclick = toggle;
+$('reset').onclick = () => setMode(mode);
+$('m-focus').onclick = () => setMode('focus');
+$('m-break').onclick = () => setMode('break');
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+draw();
+</script>
+</body>
+</html>
