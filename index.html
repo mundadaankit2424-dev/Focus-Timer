@@ -12,8 +12,8 @@
 :root{--bg:#0F2A2E;--ink:#EDE6D6;--dim:#8FA5A3;--accent:#FF6B6B;--track:#1D4047}
 body.break{--accent:#7FD6B2}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
-html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom)}
+html{height:100%}body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:calc(env(safe-area-inset-top) + 20px) 20px calc(env(safe-area-inset-bottom) + 20px)}
 button{font:inherit;cursor:pointer;transition:transform .12s,background .2s,border-color .2s}
 button:active{transform:scale(.93)}
 .modes{display:flex;gap:8px}
@@ -46,6 +46,15 @@ circle{fill:none;stroke-width:10}
 @keyframes pop{from{transform:scale(0)}}
 .count{color:var(--dim);font-size:14px;text-align:center}
 button:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+
+.gear{background:none;border:1px solid var(--track);color:var(--dim);padding:8px 18px;border-radius:20px;font-size:14px}
+.panel{width:min(92vw,360px);background:var(--track);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:14px;font-size:15px;user-select:auto}
+.panel[hidden]{display:none}
+.panel label{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.panel select,.panel #test{background:var(--bg);color:var(--ink);border:1px solid var(--dim);border-radius:10px;padding:8px 10px;font-size:14px}
+.panel input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
+.panel input[type=file]{max-width:170px;font-size:12px;color:var(--dim)}
+.panel small{color:var(--dim);font-size:12px;line-height:1.4}
 </style>
 </head>
 <body>
@@ -72,6 +81,21 @@ button:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
 </div>
 <div class="dots" id="dots"></div>
 <div class="count" id="count"></div>
+<button class="gear" id="gear">&#9881; Alerts</button>
+<div class="panel" id="panel" hidden>
+  <label>Sound
+    <span><select id="snd">
+      <option value="chime">Chime</option><option value="bell">Bell</option>
+      <option value="soft">Soft melody</option><option value="beep">Beep</option>
+      <option value="digital">Digital</option><option value="custom">My own file</option>
+      <option value="silent">Silent</option></select>
+    <button id="test">Play</button></span></label>
+  <label>My own sound <input type="file" id="file" accept="audio/*"></label>
+  <label>Vibrate <input type="checkbox" id="vib"></label>
+  <label>Show notification <input type="checkbox" id="notif"></label>
+  <label>Keep screen on while running <input type="checkbox" id="wake"></label>
+  <small id="note">Notifications and sounds work best when the app stays open. Turn on "Keep screen on" for the most reliable alert.</small>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -123,7 +147,7 @@ function draw(){
   chips();
 }
 
-function stop(){ clearInterval(tick); tick=null; endAt=null; }
+function stop(){ clearInterval(tick); tick=null; endAt=null; wakeOff(); }
 
 function setMode(m){
   stop(); mode=m; left=total();
@@ -139,22 +163,45 @@ function setMinutes(m){
   stop(); left = total(); save(); buzz(15); draw();
 }
 
-function beep(){
-  try {
-    const a = new (window.AudioContext||window.webkitAudioContext)();
-    [0,.25,.5].forEach(d=>{
-      const o=a.createOscillator(), g=a.createGain();
-      o.frequency.value=880; o.connect(g); g.connect(a.destination);
-      g.gain.setValueAtTime(.2,a.currentTime+d);
-      g.gain.exponentialRampToValueAtTime(.001,a.currentTime+d+.2);
-      o.start(a.currentTime+d); o.stop(a.currentTime+d+.2);
-    });
-  } catch(e){}
-  buzz([200,100,200]);
+const TONES={
+ chime:[[880,0,.5,'sine'],[1175,.2,.6,'sine'],[1568,.4,.9,'sine']],
+ bell:[[660,0,1.2,'triangle'],[1320,0,.8,'sine']],
+ soft:[[523,0,.6,'sine'],[659,.25,.6,'sine'],[784,.5,1,'sine']],
+ beep:[[880,0,.2,'square'],[880,.3,.2,'square'],[880,.6,.2,'square']],
+ digital:[[1000,0,.1,'sawtooth'],[1400,.15,.1,'sawtooth'],[1000,.3,.1,'sawtooth'],[1400,.45,.1,'sawtooth']]
+};
+let A={sound:'chime',vib:true,notif:false,wake:false}, custom=null, actx, lock=null;
+try{ Object.assign(A,JSON.parse(localStorage.getItem('alerts')||'{}')); custom=localStorage.getItem('customSound'); }catch(e){}
+const saveA=()=>{ try{localStorage.setItem('alerts',JSON.stringify(A));}catch(e){} };
+const note=t=>{ $('note').textContent=t; };
+function unlock(){ try{ actx=actx||new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); }catch(e){} }
+function playSound(name){
+  if(name==='silent') return;
+  if(name==='custom' && custom){ new Audio(custom).play().catch(()=>{}); return; }
+  unlock(); if(!actx) return;
+  (TONES[name]||TONES.chime).forEach(([f,d,l,t])=>{
+    const o=actx.createOscillator(), g=actx.createGain(), st=actx.currentTime+d;
+    o.type=t; o.frequency.value=f; o.connect(g); g.connect(actx.destination);
+    g.gain.setValueAtTime(.0001,st); g.gain.exponentialRampToValueAtTime(.25,st+.02); g.gain.exponentialRampToValueAtTime(.0001,st+l);
+    o.start(st); o.stop(st+l+.05);
+  });
 }
+function alertUser(){
+  playSound(A.sound);
+  if(A.vib) buzz([200,100,200,100,200]);
+  if(A.notif && 'Notification' in window && Notification.permission==='granted'){
+    const msg = mode==='focus' ? 'Focus session done. Time for a break!' : 'Break over. Ready to focus?';
+    navigator.serviceWorker.ready
+      .then(r=>r.showNotification('Focus Timer',{body:msg,icon:'icon-192.png',vibrate:[200,100,200]}))
+      .catch(()=>{ try{ new Notification('Focus Timer',{body:msg}); }catch(e){} });
+  }
+}
+async function wakeOn(){ try{ if(A.wake && 'wakeLock' in navigator && !lock) lock=await navigator.wakeLock.request('screen'); }catch(e){} }
+function wakeOff(){ try{ lock&&lock.release(); }catch(e){} lock=null; }
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && endAt){ lock=null; wakeOn(); } });
 
 function finish(){
-  stop(); beep();
+  stop(); alertUser();
   if (mode==='focus'){ sessions++; save(); setMode('break'); }
   else setMode('focus');
 }
@@ -162,6 +209,7 @@ function finish(){
 function toggle(){
   buzz(20);
   if (endAt){ left=Math.max(0,Math.round((endAt-Date.now())/1000)); stop(); draw(); return; }
+  unlock(); wakeOn();
   endAt = Date.now()+left*1000;
   tick = setInterval(()=>{
     left = Math.max(0,Math.round((endAt-Date.now())/1000));
@@ -187,6 +235,31 @@ $('plus').onclick  = ()=>setMinutes(mins[mode]+1);
   ['pointerdown'].forEach(e=>$(id).addEventListener(e,start));
   ['pointerup','pointerleave','pointercancel'].forEach(e=>$(id).addEventListener(e,end));
 });
+
+$('gear').onclick=()=>{ $('panel').hidden=!$('panel').hidden; };
+$('snd').value=A.sound; $('vib').checked=A.vib; $('notif').checked=A.notif; $('wake').checked=A.wake;
+$('snd').onchange=e=>{ A.sound=e.target.value; saveA(); playSound(A.sound); };
+$('test').onclick=()=>playSound(A.sound);
+$('vib').onchange=e=>{ A.vib=e.target.checked; saveA(); if(A.vib) buzz(100); };
+$('wake').onchange=e=>{ A.wake=e.target.checked; saveA(); if(endAt){ A.wake?wakeOn():wakeOff(); } };
+$('notif').onchange=async e=>{
+  if(e.target.checked){
+    if(!('Notification' in window)){ note('This browser does not support notifications.'); e.target.checked=false; return; }
+    const p=await Notification.requestPermission();
+    if(p!=='granted'){ e.target.checked=false; note('Permission blocked. Allow notifications in Chrome site settings.'); return; }
+  }
+  A.notif=e.target.checked; saveA();
+};
+$('file').onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  if(f.size>1500000){ note('File too large. Choose a sound under 1.5 MB.'); return; }
+  const r=new FileReader();
+  r.onload=()=>{ try{
+    localStorage.setItem('customSound',r.result); custom=r.result;
+    A.sound='custom'; $('snd').value='custom'; saveA(); playSound('custom'); note('Your sound is saved.');
+  }catch(err){ note('Could not save this file. Try a smaller one.'); } };
+  r.readAsDataURL(f);
+};
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 setMode('focus');
